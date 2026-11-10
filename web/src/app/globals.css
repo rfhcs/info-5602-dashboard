@@ -1,0 +1,111 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/*
+  Light mode only. Every colour on the page comes from the tokens below;
+  the same values are mirrored for D3 in src/lib/theme.ts.
+
+  Brand palette (UI chrome + single-series charts)
+    primary   #184f95  navy       — brand, active controls, "better than expected"
+    secondary #c3c2b7  stone      — context / de-emphasised marks, quiet surfaces
+    tertiary  #e34948  coral red  — spotlight: "worse than expected", notable events
+  All three were checked with the colour-vision validator (navy ↔ red ΔE 18+ under
+  protan/deutan simulation). Text never wears a data colour.
+*/
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-roboto), ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-roboto), ui-sans-serif, system-ui, sans-serif;
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-tertiary: var(--tertiary);
+  --color-tertiary-foreground: var(--tertiary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-stone: var(--stone);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+}
+
+:root {
+  color-scheme: light;
+  --radius: 0.625rem;
+
+  /* surfaces */
+  --background: #f9f9f7;       /* page plane */
+  --card: #fcfcfb;             /* chart surface */
+  --popover: #ffffff;
+
+  /* ink */
+  --foreground: #0b0b0b;       /* primary text */
+  --card-foreground: #0b0b0b;
+  --popover-foreground: #0b0b0b;
+  --ink-2: #52514e;            /* secondary text — 7.7:1 */
+  --ink-3: #6b6a65;            /* axis ticks, footnotes — 5.3:1 */
+
+  /* brand: primary / secondary / tertiary */
+  --primary: #184f95;
+  --primary-foreground: #ffffff;
+  --secondary: #efeee9;        /* stone wash for quiet UI surfaces */
+  --secondary-foreground: #0b0b0b;
+  --stone: #c3c2b7;            /* stone for de-emphasised data marks */
+  --tertiary: #e34948;
+  --tertiary-foreground: #ffffff;
+
+  --muted: #f0efec;
+  --muted-foreground: #52514e;
+  --accent: #efeee9;
+  --accent-foreground: #0b0b0b;
+  --destructive: #d03b3b;
+  --border: #e1e0d9;
+  --input: #c3c2b7;
+  --ring: #184f95;
+
+  /* cause palette (fixed order, CVD-validated) */
+  --chart-1: #e87ba4;          /* late aircraft */
+  --chart-2: #2a78d6;          /* carrier */
+  --chart-3: #eb6834;          /* extreme weather */
+  --chart-4: #1baf7a;          /* NAS */
+  --chart-5: #eda100;          /* security */
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+    scroll-behavior: smooth;
+  }
+  /* Numbers that line up in columns or on axes */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
