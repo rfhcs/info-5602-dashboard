@@ -13,7 +13,7 @@ import { extent, format, line, max, min, scaleLinear, type ScaleLinear } from "d
 import type { MonthAvg, MonthRow } from "@/lib/data";
 import { CAUSE_COLOR, CAUSE_LABEL, MONTHS, UI, type Cause } from "@/lib/theme";
 import { ChartCard } from "@/components/charts/chart-card";
-import { Bridge, Section } from "@/components/charts/section";
+import { Section } from "@/components/charts/section";
 import {
   ChartTooltip,
   GridX,
@@ -32,16 +32,19 @@ const pct0 = (v: number) => `${Math.round(v)}%`;
 const thousands = format(",.0f");
 const kfmt = (v: number) => `${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 1)}k`;
 
-/** Notable months, captioned on the cancellation panel. Confirmed events. */
-const EVENTS: { year: number; month: number; label?: string; note: string }[] = [
-  { year: 2024, month: 1, note: "1" }, // labelled jointly with Jan 2026
-  { year: 2024, month: 7, label: "CrowdStrike IT outage ’24", note: "2" },
-  { year: 2026, month: 1, label: "Winter storms, Jan ’24 & ’26", note: "1" },
+/** Notable months, captioned on the cancellation panel and named in its tooltip. Confirmed events. */
+const EVENTS: { year: number; month: number; label?: string; name: string }[] = [
+  { year: 2024, month: 1, name: "winter storm" }, // labelled jointly with Jan 2026
+  { year: 2024, month: 7, label: "CrowdStrike IT outage ’24", name: "CrowdStrike IT outage" },
+  { year: 2026, month: 1, label: "Winter storms, Jan ’24 & ’26", name: "winter storm" },
 ];
 
 export default function RQ2Seasonality({ months, monthAvg }: { months: MonthRow[]; monthAvg: MonthAvg[] }) {
   const peak = monthAvg.reduce((a, b) => (b.delayRate > a.delayRate ? b : a));
   const low = monthAvg.reduce((a, b) => (b.delayRate < a.delayRate ? b : a));
+  const busiest = monthAvg.reduce((a, b) => (b.flightsPerDay > a.flightsPerDay ? b : a));
+  const quietest = monthAvg.reduce((a, b) => (b.flightsPerDay < a.flightsPerDay ? b : a));
+  const r = pearson(months.map((d) => d.volumeVsYearAvg), months.map((d) => d.delayRate));
 
   return (
     <Section
@@ -54,15 +57,25 @@ export default function RQ2Seasonality({ months, monthAvg }: { months: MonthRow[
           worst season, not the holidays.
         </>
       }
+      stats={[
+        {
+          label: "Flights per day, busiest vs quietest month",
+          value: `+${Math.round((busiest.flightsPerDay / quietest.flightsPerDay - 1) * 100)}%`,
+          context: `${MONTHS[busiest.month - 1]} vs ${MONTHS[quietest.month - 1]}`,
+        },
+        {
+          label: "Arrivals delayed, best vs worst month",
+          value: `${pct0(low.delayRate)} → ${pct0(peak.delayRate)}`,
+          context: `${MONTHS[low.month - 1]} → ${MONTHS[peak.month - 1]}`,
+        },
+        {
+          label: "Correlation, flight volume vs delay rate",
+          value: `r = ${r.toFixed(2)}`,
+          context: "Busier months are only somewhat more delayed",
+        },
+      ]}
     >
       <SeasonPanels months={months} monthAvg={monthAvg} />
-
-      <Bridge>
-        If busy meant delayed, the busiest months would also be the worst. They aren&rsquo;t: volume and delay rate are
-        only loosely related, and the gap from the {MONTHS[low.month - 1]} low ({pct0(low.delayRate)}) to the{" "}
-        {MONTHS[peak.month - 1]} peak ({pct0(peak.delayRate)}) comes mostly from weather and stretched summer
-        schedules.
-      </Bridge>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <BusyVsDelayed months={months} />
@@ -80,7 +93,7 @@ type Metric = { key: "flightsPerDay" | "delayRate" | "cancelRate"; title: string
 const METRICS: Metric[] = [
   { key: "flightsPerDay", title: "Flights per day", fmt: thousands, tick: kfmt },
   { key: "delayRate", title: "% of arrivals delayed ≥15 min", fmt: pct1, tick: pct0 },
-  { key: "cancelRate", title: "% of arrivals cancelled", fmt: pct1, tick: (v) => `${v}%` },
+  { key: "cancelRate", title: "% of arrivals cancelled (not counted as delays)", fmt: pct1, tick: (v) => `${v}%` },
 ];
 
 function SeasonPanels({ months, monthAvg }: { months: MonthRow[]; monthAvg: MonthAvg[] }) {
@@ -88,7 +101,7 @@ function SeasonPanels({ months, monthAvg }: { months: MonthRow[]; monthAvg: Mont
   const [ref, width] = useWidth();
   const [hover, setHover] = useState<number | null>(null); // month 1–12
   // The side note for December needs ~130px; on narrow screens it's dropped
-  // (footnote 3 says the same thing) and the plot takes the full width.
+  // and the plot takes the full width.
   const sideNote = width >= 600;
   const m = { top: 8, right: sideNote ? 132 : 16, bottom: 44, left: 48 };
   const panelH = 118;
@@ -98,9 +111,7 @@ function SeasonPanels({ months, monthAvg }: { months: MonthRow[]; monthAvg: Mont
   const x = scaleLinear().domain([1, 12]).range([0, innerW]);
   const years = [...new Set(months.map((d) => d.year))].sort();
 
-  const nov = monthAvg[10];
   const dec = monthAvg[11];
-
 
   return (
     <ChartCard
@@ -115,37 +126,6 @@ function SeasonPanels({ months, monthAvg }: { months: MonthRow[]; monthAvg: Mont
           ]}
         />
       }
-      footnotes={[
-        {
-          mark: "1",
-          text: (
-            <>
-              <b className="font-medium text-ink-2">Winter storms</b> (Jan 2024, Jan 2026): widespread cancellations. Jan
-              2026 is the highest month in the data at{" "}
-              {pct1(months.find((d) => d.year === 2026 && d.month === 1)?.cancelRate ?? 0)}.
-            </>
-          ),
-        },
-        {
-          mark: "2",
-          text: (
-            <>
-              <b className="font-medium text-ink-2">CrowdStrike IT outage</b> (Jul 2024): a faulty software update took
-              down airline IT systems on 19 July. Delta and Endeavor cancelled 6.6–8% of arrivals that month.
-            </>
-          ),
-        },
-        {
-          mark: "3",
-          text: (
-            <>
-              Winter&rsquo;s damage shows up as cancellations, which BTS does not count as delays. Read the bottom two
-              panels together. December is where holiday travel shows: delays rise from {pct0(nov.delayRate)} to{" "}
-              {pct0(dec.delayRate)} even as flights per day fall.
-            </>
-          ),
-        },
-      ]}
     >
       <div ref={ref} data-chart="" className="relative">
         <svg
@@ -207,7 +187,7 @@ function SeasonPanels({ months, monthAvg }: { months: MonthRow[]; monthAvg: Mont
                   {metric.key === "delayRate" && sideNote && (
                     <text x={innerW + 10} y={y(dec.delayRate)} dy="0.32em" style={{ fill: UI.ink2, fontSize: 11 }}>
                       <tspan x={innerW + 10}>Dec: delays up,</tspan>
-                      <tspan x={innerW + 10} dy="1.2em">flights down³</tspan>
+                      <tspan x={innerW + 10} dy="1.2em">flights down</tspan>
                     </text>
                   )}
                   {/* events on the cancellation panel */}
@@ -230,9 +210,6 @@ function SeasonPanels({ months, monthAvg }: { months: MonthRow[]; monthAvg: Mont
                               style={{ fill: UI.ink2, fontSize: 11 }}
                             >
                               {ev.label}
-                              <tspan dy="-0.45em" fontSize="0.75em">
-                                {ev.note}
-                              </tspan>
                             </text>
                           )}
                         </g>
@@ -300,6 +277,15 @@ function SeasonPanels({ months, monthAvg }: { months: MonthRow[]; monthAvg: Mont
                       <TipRow color={UI.primary} value={thousands(monthAvg[hover - 1].flightsPerDay)} label="flights / day" />
                       <TipRow color={UI.primary} value={pct1(monthAvg[hover - 1].delayRate)} label="delayed" />
                       <TipRow color={UI.primary} value={pct1(monthAvg[hover - 1].cancelRate)} label="cancelled" />
+                      {EVENTS.filter((ev) => ev.month === hover).map((ev) => (
+                        <TipRow
+                          key={ev.year}
+                          color={UI.tertiary}
+                          shape="dot"
+                          value={pct1(months.find((d) => d.year === ev.year && d.month === ev.month)?.cancelRate ?? 0)}
+                          label={`cancelled in ${MONTHS[ev.month - 1]} ${ev.year} (${ev.name})`}
+                        />
+                      ))}
                     </>
                   ),
                 }
@@ -481,7 +467,7 @@ function CausePanel({ cause, monthAvg, width, ratio }: { cause: Cause; monthAvg:
           {CAUSE_LABEL[cause]}
         </text>
         <text x={width} y={12} textAnchor="end" className="tabular" style={{ fill: UI.ink2, fontSize: 11 }}>
-          peak / low ×{ratio.toFixed(1)}
+          peak/low ×{ratio.toFixed(1)}
         </text>
         <g transform={`translate(${m.left},${m.top})`}>
           <GridY ticks={y.ticks(2)} y={y} width={innerW} format={(v) => String(v)} />

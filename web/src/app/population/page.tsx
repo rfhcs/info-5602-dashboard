@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { loadDashboardData } from "@/lib/data";
-import PopulationMap from "@/components/presentation/population-map";
+import PopulationMap from "@/components/population/population-map";
 
 // Presentation-only slide. Not linked from the dashboard and not indexed.
 export const metadata: Metadata = {

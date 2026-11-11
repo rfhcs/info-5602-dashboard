@@ -3,22 +3,21 @@
 /**
  * RQ1: What is the biggest cause of flight delays?
  *
- * Two ways to measure "biggest": how many delayed flights a cause touches, and
- * how many minutes it costs. Both crown late aircraft, which is a knock-on
- * effect, so the root-cause reading lives in the footnotes. A second chart
- * compares late aircraft vs carrier share by airline (the cascade story).
+ * Three ways to measure "biggest": how many delayed flights a cause touches,
+ * how many minutes it costs, and the minutes once late aircraft (a knock-on
+ * effect) is traced back to the cause that started it. A second chart compares
+ * late aircraft vs carrier share by airline (the cascade story).
  */
 
 import { format, max, scaleBand, scaleLinear } from "d3";
 import type { CauseTotal, Carrier } from "@/lib/data";
 import { CAUSE_COLOR, CAUSE_LABEL, CAUSE_SHORT, UI, type Cause } from "@/lib/theme";
-import { ChartCard, type Footnote } from "@/components/charts/chart-card";
-import { Bridge, Section } from "@/components/charts/section";
+import { ChartCard } from "@/components/charts/chart-card";
+import { Section } from "@/components/charts/section";
 import {
   ChartTooltip,
   GridX,
   Legend,
-  SvgSup,
   TipRow,
   TipTitle,
   barPath,
@@ -34,7 +33,7 @@ const compact = format(".3~s");
 export default function RQ1Causes({ causes, carriers }: { causes: CauseTotal[]; carriers: Carrier[] }) {
   const get = (c: Cause) => causes.find((d) => d.cause === c)!;
   const late = get("late_aircraft");
-  const root = (c: Cause) => get(c).rootShare ?? 0;
+  const topRoot = causes.reduce((a, b) => ((b.rootShare ?? 0) > (a.rootShare ?? 0) ? b : a));
 
   return (
     <Section
@@ -43,78 +42,61 @@ export default function RQ1Causes({ causes, carriers }: { causes: CauseTotal[]; 
       question="What is the biggest cause of flight delays?"
       answer={
         <>
-          Late aircraft tops both measures, but it&rsquo;s a knock-on effect. Trace it back and the airlines&rsquo; own
-          operations cause most delays.
+        Short answer: Late aircraft, but that&rsquo;s a circular cause. The airline&rsquo;s own operations cause the most delays.
         </>
       }
+      stats={[
+        { label: "Delay minutes from late aircraft", value: pct0(late.shareMinutes), context: "A delay passed on from the plane’s previous flight" },
+        { label: `Root-cause minutes from ${CAUSE_LABEL[topRoot.cause].toLowerCase()}`, value: pct0(topRoot.rootShare ?? 0), context: "Once late aircraft is traced back to what started it" },
+        {
+          label: "Average extreme-weather delay",
+          value: `${Math.round(get("weather").avgMinPerDelay)} min`,
+          context: `Rare but long: vs ${Math.round(get("carrier").avgMinPerDelay)} for carrier, ${Math.round(get("nas").avgMinPerDelay)} for NAS`,
+        },
+      ]}
     >
-      <CauseShares
-        causes={causes}
-        footnotes={[
-          {
-            mark: "1",
-            text: (
-              <>
-                <b className="font-medium text-ink-2">Late aircraft is a symptom, not a cause:</b> the inbound plane
-                arrived late, so an earlier delay was passed down. Redistributed to the causes that started it, the
-                root-cause split of delay minutes is Carrier {pct0(root("carrier"))} · NAS {pct0(root("nas"))} · Extreme
-                weather {pct0(root("weather"))} · Security {root("security").toFixed(1)}%.
-              </>
-            ),
-          },
-          {
-            mark: "2",
-            text: (
-              <>
-                Extreme-weather delays are rare but long: {Math.round(get("weather").avgMinPerDelay)} min each on
-                average, vs {Math.round(get("carrier").avgMinPerDelay)} for carrier and{" "}
-                {Math.round(get("nas").avgMinPerDelay)} for NAS.
-              </>
-            ),
-          },
-          {
-            mark: "3",
-            text: (
-              <>
-                BTS files <i>non-extreme</i> weather (rain, low cloud, wind) under NAS, so weather&rsquo;s true share is
-                understated. NAS = National Aviation System: air traffic control, airport congestion, heavy traffic.
-              </>
-            ),
-          },
-        ]}
-      />
-
-      <Bridge>
-        Late aircraft accounts for {pct0(late.shareMinutes)} of delay minutes overall, but how much depends on the
-        airline. Airlines that turn planes around quickly let one morning delay cascade through the rest of the day.
-      </Bridge>
-
+      <CauseShares causes={causes} topRoot={topRoot.cause} />
       <CarrierMix carriers={carriers} />
     </Section>
   );
 }
 
 /* ================================================================ Chart A
-   Two measures side by side, same rows, same 0–50% scale so bar lengths
-   compare directly across panels. Bars ranked by share of minutes.         */
+   Three measures side by side, same rows, same scale so bar lengths compare
+   directly across panels. Bars ranked by share of minutes. The root-cause
+   panel has no late-aircraft bar: those minutes are reassigned.            */
 
-const MARKS: Partial<Record<Cause, string>> = { late_aircraft: "1", weather: "2,3", nas: "3" };
-
-function CauseShares({ causes, footnotes }: { causes: CauseTotal[]; footnotes: Footnote[] }) {
+function CauseShares({ causes, topRoot }: { causes: CauseTotal[]; topRoot: Cause }) {
   const period = usePeriod();
   const [ref, width] = useWidth();
   const rows = [...causes].sort((a, b) => b.shareMinutes - a.shareMinutes);
-  const stacked = width < 620; // phone: panels stack, each keeps its labels
+  const stacked = width < 760; // phone/tablet: panels stack, each keeps its labels
+  const totalMinutes = causes.reduce((s, c) => s + c.minutes, 0);
 
-  const domainMax = Math.max(50, Math.ceil((max(rows, (r) => Math.max(r.shareFlights, r.shareMinutes)) ?? 50) / 10) * 10);
+  const domainMax = Math.max(
+    50,
+    Math.ceil((max(rows, (r) => Math.max(r.shareFlights, r.shareMinutes, r.rootShare ?? 0)) ?? 50) / 10) * 10,
+  );
+  // the labelled panel is wider so all three bar areas come out about the same length
+  const unit = (width - 48) / 3.5;
 
   return (
     <ChartCard
-      title="Two ways to measure “biggest”: both put late aircraft first"
-      subtitle={`Each cause’s share of delayed flights and of delay minutes, ${period.range}`}
-      footnotes={footnotes}
+      title={`Late aircraft leads both raw measures; traced back to where delays start, ${CAUSE_LABEL[topRoot].toLowerCase()} leads`}
+      subtitle={`Each cause’s share of delayed flights, of delay minutes, and of minutes by root cause, ${period.range}`}
+      footnotes={[
+        {
+          mark: "",
+          text: (
+            <>
+              NAS = air traffic control and airport congestion; BTS also files non-extreme weather (rain, low cloud,
+              wind) there, so weather&rsquo;s true share is understated.
+            </>
+          ),
+        },
+      ]}
     >
-      <div ref={ref} data-chart="" className={stacked ? "space-y-6" : "grid grid-cols-[1.18fr_1fr] gap-6"}>
+      <div ref={ref} data-chart="" className={stacked ? "space-y-6" : "grid grid-cols-[1.5fr_1fr_1fr] gap-6"}>
         <SharePanel
           rows={rows}
           value={(r) => r.shareFlights}
@@ -122,16 +104,25 @@ function CauseShares({ causes, footnotes }: { causes: CauseTotal[]; footnotes: F
           detail={(r) => `${compact(r.flights)} delayed flights`}
           domainMax={domainMax}
           showLabels
-          width={stacked ? width : Math.floor((width - 24) * (1.18 / 2.18))}
+          width={stacked ? width : Math.floor(unit * 1.5)}
         />
         <SharePanel
           rows={rows}
           value={(r) => r.shareMinutes}
           title="Share of delay minutes"
-          detail={(r) => `${compact(r.minutes)} minutes`}
+          detail={(r) => `${compact(r.minutes)} minutes · ${Math.round(r.avgMinPerDelay)} min per delay`}
           domainMax={domainMax}
           showLabels={stacked}
-          width={stacked ? width : Math.floor((width - 24) * (1 / 2.18))}
+          width={stacked ? width : Math.floor(unit)}
+        />
+        <SharePanel
+          rows={rows}
+          value={(r) => r.rootShare}
+          title="Root cause of delay minutes"
+          detail={(r) => `${compact((totalMinutes * (r.rootShare ?? 0)) / 100)} minutes incl. reassigned`}
+          domainMax={domainMax}
+          showLabels={stacked}
+          width={stacked ? width : Math.floor(unit)}
         />
       </div>
     </ChartCard>
@@ -148,7 +139,7 @@ function SharePanel({
   width,
 }: {
   rows: CauseTotal[];
-  value: (r: CauseTotal) => number;
+  value: (r: CauseTotal) => number | null; // null: no bar (late aircraft in the root-cause panel)
   title: string;
   detail: (r: CauseTotal) => string;
   domainMax: number;
@@ -179,6 +170,19 @@ function SharePanel({
           {rows.map((r) => {
             const yy = (y(r.cause) ?? 0) + (y.bandwidth() - bh) / 2;
             const v = value(r);
+            if (v === null)
+              return (
+                <g key={r.cause}>
+                  <text x={6} y={yy + bh / 2} dy="0.32em" style={{ fill: UI.ink3, fontSize: 11.5 }}>
+                    reassigned to its root cause
+                  </text>
+                  {showLabels && (
+                    <text x={-12} y={yy + bh / 2} dy="0.32em" textAnchor="end" style={{ fill: UI.ink2, fontSize: 12.5 }}>
+                      {compactLabels ? CAUSE_SHORT[r.cause] : CAUSE_LABEL[r.cause]}
+                    </text>
+                  )}
+                </g>
+              );
             return (
               <g
                 key={r.cause}
@@ -201,7 +205,6 @@ function SharePanel({
                 {showLabels && (
                   <text x={-12} y={yy + bh / 2} dy="0.32em" textAnchor="end" style={{ fill: UI.ink2, fontSize: 12.5 }}>
                     {compactLabels ? CAUSE_SHORT[r.cause] : CAUSE_LABEL[r.cause]}
-                    {MARKS[r.cause] && <SvgSup>{MARKS[r.cause]}</SvgSup>}
                   </text>
                 )}
               </g>
@@ -262,7 +265,7 @@ function CarrierMix({ carriers }: { carriers: Carrier[] }) {
           main cause.
         </>
       }
-      subtitle={`Share of each airline’s delay minutes caused by late aircraft vs by the airline itself, ${period.range}`}
+      subtitle={`Share of each airline’s delay minutes caused by late aircraft vs by the airline itself, ${period.range}. Other causes not shown.`}
       legend={
         <Legend
           items={[
@@ -271,17 +274,6 @@ function CarrierMix({ carriers }: { carriers: Carrier[] }) {
           ]}
         />
       }
-      footnotes={[
-        {
-          mark: "",
-          text: (
-            <>
-              NAS, extreme weather and security make up the rest of each airline&rsquo;s delay minutes. They are left
-              out here to focus on the two causes that differ most between airlines.
-            </>
-          ),
-        },
-      ]}
     >
       <div ref={ref} data-chart="" className="relative">
         <svg {...svgProps} width={width} height={innerH + m.top + m.bottom} role="img" aria-label="Late aircraft versus carrier share of delay minutes by airline">

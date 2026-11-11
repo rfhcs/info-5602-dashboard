@@ -21,7 +21,7 @@ export const CAUSE_LABEL: Record<Cause, string> = {
   late_aircraft: "Late aircraft",
   carrier: "Carrier",
   weather: "Extreme weather",
-  nas: "NAS (air traffic & airport)",
+  nas: "NAS (air traffic)",
   security: "Security",
 };
 

@@ -4,13 +4,14 @@
  * RQ3: Which airports experience the most delays, without drawing a population map?
  *
  * Counting delayed flights just ranks airports by size. Every fix from
- * explore.ipynb is here, each chart tagged with the fix it applies:
+ * explore.ipynb is here:
  *   1. Rate, not count
  *   2. Volume floor (≥100k arrivals), with a shrinkage toggle beside it
  *   3. Airline-mix adjustment (excess percentage points)
  *   4. Cause fingerprint (top airports for NAS and for extreme-weather minutes per arrival)
  *
- * The two filters at the top of the section scope every chart below them.
+ * The two filters at the top of the section scope every chart below them;
+ * the headline numbers above the filters stay fixed (≥100k arrivals, no shrinking).
  */
 
 import { useMemo, useState } from "react";
@@ -18,7 +19,7 @@ import { extent, format, max, scaleBand, scaleLinear, scaleLog } from "d3";
 import type { Airport } from "@/lib/data";
 import { CAUSE_COLOR, UI } from "@/lib/theme";
 import { ChartCard } from "@/components/charts/chart-card";
-import { Bridge, Section } from "@/components/charts/section";
+import { Section } from "@/components/charts/section";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import {
@@ -33,6 +34,7 @@ import {
   useWidth,
 } from "@/components/charts/primitives";
 import { usePeriod } from "@/lib/period";
+import Link from "next/link";
 
 const FLOOR = 100_000;
 const pct1 = (v: number) => `${v.toFixed(1)}%`;
@@ -100,6 +102,9 @@ export default function RQ3Airports({
   const top30 = [...airports].sort((a, b) => b.flights - a.flights).slice(0, 30);
   const top30Flights = (sum(top30, (a) => a.flights) / totalFlights) * 100;
   const top30Delays = (sum(top30, (a) => a.delayed) / sum(airports, (a) => a.delayed)) * 100;
+  const big = airports.filter((a) => a.flights >= FLOOR);
+  const worstRate = big.reduce((a, b) => (b.delayRate > a.delayRate ? b : a));
+  const worstExcess = big.reduce((a, b) => (b.excessPp > a.excessPp ? b : a));
 
   return (
     <Section
@@ -112,31 +117,29 @@ export default function RQ3Airports({
           do elsewhere.
         </>
       }
+      stats={[
+        {
+          label: "Share of all delays at the 30 busiest airports",
+          value: pct0(top30Delays),
+          context: (
+            <>
+              They also handle {pct0(top30Flights)} of arrivals, so counting delays just draws{" "}
+              <Link href="/population" className="text-primary">a population map</Link>
+            </>
+          ),
+        },
+        {
+          label: "Highest delay rate, ≥100k arrivals",
+          value: pct1(worstRate.delayRate),
+          context: `${worstRate.code} · ${shortCity(worstRate.city)} (US average ${pct1(nationalDelayRate)})`,
+        },
+        {
+          label: "Furthest above its own airlines",
+          value: `${signed(worstExcess.excessPp)} pts`,
+          context: `${worstExcess.code} · ${shortCity(worstExcess.city)}, vs the same airlines nationally`,
+        },
+      ]}
     >
-      <Bridge>
-        Counting delayed flights just ranks airports by size: the 30 busiest handle {pct0(top30Flights)} of arrivals and{" "}
-        {pct0(top30Delays)} of delays, so a count map is really a population map. Every chart below applies at least
-        one of four fixes:
-      </Bridge>
-      <ol className="grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
-        {[
-          ["Rate, not count", "% of arrivals delayed"],
-          ["Volume floor", "drop or shrink small, noisy airports"],
-          ["Airline-mix adjustment", "compare to what its airlines do nationally"],
-          ["Cause fingerprint", "airspace limits vs extreme weather"],
-        ].map(([t, d], i) => (
-          <li key={t} className="flex gap-2.5 rounded-lg bg-card px-3 py-2.5 ring-1 ring-foreground/10">
-            <span className="mt-px inline-flex size-5 shrink-0 items-center justify-center rounded-full bg-secondary text-xs font-medium text-ink-2">
-              {i + 1}
-            </span>
-            <span>
-              <span className="font-medium">{t}</span>
-              <span className="block text-xs text-ink-2">{d}</span>
-            </span>
-          </li>
-        ))}
-      </ol>
-
       {/* ---- filter row: one row, above everything it scopes ---- */}
       <>
         <div className="z-10 flex md:sticky md:top-16 flex-wrap items-center gap-x-6 gap-y-3 rounded-lg bg-card/95 px-4 py-3 shadow-sm ring-1 ring-foreground/10 backdrop-blur">
@@ -157,23 +160,15 @@ export default function RQ3Airports({
           </span>
         </div>
         <p className="-mt-3 px-1 text-xs leading-relaxed text-ink-3 text-pretty">
-          <b className="font-medium text-ink-2">Filters apply to every chart in this section.</b> The floor removes
-          airports with too few arrivals for a stable rate. Shrinking keeps every airport but blends its rate with the
-          US average ({pct1(nationalDelayRate)}) in proportion to how little data it has: an airport with{" "}
-          {Math.round(shrinkK)} arrivals moves halfway, while ATL barely moves. The strength (k ≈ {Math.round(shrinkK)}{" "}
-          arrivals) is estimated from the data. Turn both off to see the noise that both fixes deal with.
+          Filters apply to every chart below. Shrinking blends each airport&rsquo;s numbers with the US average; one
+          with {Math.round(shrinkK)} arrivals moves halfway.
         </p>
       </>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <RateRanking view={view} national={nationalDelayRate} floor={floor} shrink={shrink} />
+        <RateRanking view={view} national={nationalDelayRate} />
         <SizeVsRate view={view} national={nationalDelayRate} />
       </div>
-
-      <Bridge>
-        Some airports share a high delay rate because they share airlines. The next chart compares each airport with
-        what its own airlines achieve nationally in the same month. What remains is the airport&rsquo;s own effect.
-      </Bridge>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <ExcessDelay view={view} />
@@ -228,7 +223,7 @@ function placeLabels(
    Fix 1 (+2): the 15 highest delay rates. Single series → one colour (navy).
    A hairline marks the US average.                                          */
 
-function RateRanking({ view, national, floor, shrink }: { view: View[]; national: number; floor: boolean; shrink: boolean }) {
+function RateRanking({ view, national }: { view: View[]; national: number }) {
   const period = usePeriod();
   const [ref, width] = useWidth(520);
   const { tip, bind, svgProps } = useTooltip();
@@ -240,11 +235,6 @@ function RateRanking({ view, national, floor, shrink }: { view: View[]; national
   const y = scaleBand<string>().domain(rows.map((d) => d.code)).range([0, innerH]).paddingInner(0.35).paddingOuter(0.1);
   const bh = Math.min(16, y.bandwidth());
 
-  const tag = floor
-    ? `Fixes 1 + 2 · rate, with a volume floor${shrink ? " and shrinkage" : ""}`
-    : shrink
-      ? "Fixes 1 + 2 · rate, with shrinkage"
-      : "Fix 1 · rate only, no volume floor";
   const florida = rows.filter((d) => d.city.endsWith(", FL")).length;
   const title = smallLed(rows)
     ? `Without a volume floor, small airports like ${listNames(topCities(rows, 2))} top the list`
@@ -254,7 +244,6 @@ function RateRanking({ view, national, floor, shrink }: { view: View[]; national
 
   return (
     <ChartCard
-      tag={tag}
       title={title}
       subtitle={`15 highest % of arrivals delayed ≥15 min, ${period.range}`}
     >
@@ -362,7 +351,6 @@ function SizeVsRate({ view, national }: { view: View[]; national: number }) {
 
   return (
     <ChartCard
-      tag="Fix 2 · why a rate isn’t a population map"
       title="Bigger airports aren’t more delayed"
       subtitle={
         <>
@@ -470,7 +458,6 @@ function ExcessDelay({ view }: { view: View[] }) {
   const y = (i: number) => i * 21 + (i >= n ? 10 : 0);
   const bh = 13;
 
-  const atl = view.find((d) => d.code === "ATL");
   const [first, second] = sorted;
   const title = smallLed(sorted)
     ? `Without a volume floor, small airports like ${listNames(topCities(sorted, 2))} swing furthest from their airlines’ average`
@@ -480,7 +467,6 @@ function ExcessDelay({ view }: { view: View[] }) {
 
   return (
     <ChartCard
-      tag="Fix 3 · airline-mix adjustment"
       title={title}
       subtitle="Percentage points above or below what each airport’s airlines achieve nationally in the same month"
       legend={
@@ -494,18 +480,7 @@ function ExcessDelay({ view }: { view: View[] }) {
       footnotes={[
         {
           mark: "",
-          text: (
-            <>
-              Several big hubs beat their own airlines&rsquo; national average.
-              {atl && (
-                <>
-                  {" "}
-                  ATL has the most arrivals in the data and sits at {signed(atl.excess)} pts.
-                </>
-              )}{" "}
-              Rankings are fairly stable from year to year (rank correlation 0.66–0.82 between any two years), so this isn&rsquo;t noise.
-            </>
-          ),
+          text: <>Rankings hold from year to year (rank correlation 0.66–0.82 between any two years).</>,
         },
       ]}
     >
@@ -568,8 +543,12 @@ function ExcessDelay({ view }: { view: View[] }) {
 
 const TOP_N = 10;
 
+/** Why an airport tops the NAS list, shown in its tooltip. */
+const NAS_NOTES: Record<string, string> = {
+  SFO: "Fog and closely spaced parallel runways cut its arrival rate.",
+};
+
 function Fingerprint({ view, national }: { view: View[]; national: { nas: number; weather: number } }) {
-  const sfo = view.find((d) => d.code === "SFO");
   const byNas = [...view].sort((a, b) => b.mpf.nas - a.mpf.nas);
   const byWx = [...view].sort((a, b) => b.mpf.weather - a.mpf.weather);
   // each list is judged on its own: one can be clean while the other is small-airport noise
@@ -585,21 +564,8 @@ function Fingerprint({ view, national }: { view: View[]; national: { nas: number
           : `${listNames(topCities(byNas, 3))} lose the most time to air traffic; ${listNames(topCities(byWx, 3))} to extreme weather`;
   return (
     <ChartCard
-      tag="Fix 4 · cause fingerprint"
       title={title}
-      subtitle={`Delay minutes per arrival from each cause: the ${TOP_N} highest airports for each. Each panel has its own scale.`}
-      footnotes={[
-        {
-          mark: "",
-          text: (
-            <>
-              NAS = air traffic control, runway capacity and congestion: the delay cause an airport has the most control
-              over.{sfo && <> {pct0(sfo.share.nas)} of SFO&rsquo;s delay minutes are NAS: fog and closely spaced parallel runways cut its arrival rate.</>}{" "}
-              EWR and LGA also have some of the highest cancellation rates among large airports (about 3%).
-            </>
-          ),
-        },
-      ]}
+      subtitle={`Delay minutes per arrival from each cause, ${TOP_N} highest airports for each. NAS = air traffic control, runway capacity and congestion. Each panel has its own scale.`}
     >
       <div className="space-y-6">
         <CauseRanking view={view} cause="nas" title="Air traffic & airport (NAS)" national={national.nas} />
@@ -656,6 +622,7 @@ function CauseRanking({
                     </TipTitle>
                     <TipRow color={color} value={`${v.toFixed(2)} min`} label="per arrival" />
                     <TipRow value={pct1(d.share[cause])} label="of its delay minutes" />
+                    {cause === "nas" && NAS_NOTES[d.code] && <p className="mt-1 text-ink-3">{NAS_NOTES[d.code]}</p>}
                   </>,
                 )}
               >

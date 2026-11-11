@@ -13,7 +13,7 @@ const roboto = Roboto({
 export function generateMetadata(): Metadata {
   const { period } = loadDashboardData();
   return {
-    title: "Why Flying is So Painful",
+    title: "Why U.S. Flights are Always Late",
     description: `What causes US flight delays, when they happen, and where — BTS on-time data, ${period.range}.`,
   };
 }
