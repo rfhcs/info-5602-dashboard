@@ -42,7 +42,7 @@ export default function PopulationMap({ airports }: { airports: Airport[] }) {
   const opacity = scaleLinear().domain([0, top]).range([0.06, 0.95]);
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} data-chart="" className="relative">
       <svg width={width} height={height} role="img" aria-label="Heat map of delayed flights across the US">
         <defs>
           <clipPath id="us-clip">

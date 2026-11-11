@@ -70,8 +70,16 @@ export type Airport = {
   note?: string;
 };
 
+/** The data's date coverage, worked out from the CSVs so every label stays current. */
+export type Period = {
+  range: string; // "Jan 2023 – Aug 2026"
+  years: string; // "2023–2026"
+  partialNote: string | null; // "2026 covers January to August." when the last year is incomplete
+};
+
 export type DashboardData = {
   overview: { arrivals: number; delayed: number; delayRate: number; cancelRate: number; start: string; end: string };
+  period: Period;
   causes: CauseTotal[];
   carriers: Carrier[];
   months: MonthRow[];
@@ -189,6 +197,11 @@ export function loadDashboardData(): DashboardData {
       start: label(first),
       end: label(last),
     },
+    period: {
+      range: `${label(first)} – ${label(last)}`,
+      years: first.year === last.year ? String(first.year) : `${first.year}–${last.year}`,
+      partialNote: last.month < 12 ? `${last.year} covers January to ${FULL_MONTHS[last.month - 1]}.` : null,
+    },
     causes,
     carriers,
     months,
@@ -222,4 +235,5 @@ function estimateShrinkage(airports: Airport[], p: number) {
   return tau2 > 0 && sigma2 > 0 ? sigma2 / tau2 : 0;
 }
 
+const FULL_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

@@ -104,6 +104,11 @@
     @apply font-sans;
     scroll-behavior: smooth;
   }
+  /* Charts stay hidden until useWidth() has measured their real width,
+     so the server's width guess never flashes on load. */
+  [data-chart]:not([data-measured]) {
+    visibility: hidden;
+  }
   /* Numbers that line up in columns or on axes */
   .tabular {
     font-variant-numeric: tabular-nums;

@@ -25,6 +25,7 @@ import {
   useTooltip,
   useWidth,
 } from "@/components/charts/primitives";
+import { usePeriod } from "@/lib/period";
 
 const pct1 = (v: number) => `${v.toFixed(1)}%`;
 const pct0 = (v: number) => `${Math.round(v)}%`;
@@ -83,9 +84,13 @@ const METRICS: Metric[] = [
 ];
 
 function SeasonPanels({ months, monthAvg }: { months: MonthRow[]; monthAvg: MonthAvg[] }) {
+  const period = usePeriod();
   const [ref, width] = useWidth();
   const [hover, setHover] = useState<number | null>(null); // month 1–12
-  const m = { top: 8, right: 132, bottom: 28, left: 48 };
+  // The side note for December needs ~130px; on narrow screens it's dropped
+  // (footnote 3 says the same thing) and the plot takes the full width.
+  const sideNote = width >= 600;
+  const m = { top: 8, right: sideNote ? 132 : 16, bottom: 44, left: 48 };
   const panelH = 118;
   const panelGap = 46;
   const innerW = Math.max(200, width - m.left - m.right);
@@ -100,7 +105,7 @@ function SeasonPanels({ months, monthAvg }: { months: MonthRow[]; monthAvg: Mont
   return (
     <ChartCard
       title="Volume varies by about 15%; the delay rate swings by about 70%"
-      subtitle="Each calendar month averaged across 2023–2026; faint lines show individual years"
+      subtitle={`Each calendar month averaged across ${period.years}; faint lines show individual years`}
       legend={
         <Legend
           items={[
@@ -142,7 +147,7 @@ function SeasonPanels({ months, monthAvg }: { months: MonthRow[]; monthAvg: Mont
         },
       ]}
     >
-      <div ref={ref} className="relative">
+      <div ref={ref} data-chart="" className="relative">
         <svg
           width={width}
           height={innerH + m.top + m.bottom}
@@ -199,7 +204,7 @@ function SeasonPanels({ months, monthAvg }: { months: MonthRow[]; monthAvg: Mont
                     </g>
                   ))}
                   {/* December callout on the delay panel */}
-                  {metric.key === "delayRate" && (
+                  {metric.key === "delayRate" && sideNote && (
                     <text x={innerW + 10} y={y(dec.delayRate)} dy="0.32em" style={{ fill: UI.ink2, fontSize: 11 }}>
                       <tspan x={innerW + 10}>Dec: delays up,</tspan>
                       <tspan x={innerW + 10} dy="1.2em">flights down³</tspan>
@@ -255,6 +260,9 @@ function SeasonPanels({ months, monthAvg }: { months: MonthRow[]; monthAvg: Mont
                   {width < 520 ? mo[0] : mo}
                 </text>
               ))}
+              <text x={innerW / 2} y={36} textAnchor="middle" style={{ fill: UI.ink2, fontSize: 11.5 }}>
+                Month (average across {period.years})
+              </text>
             </g>
 
             {/* crosshair: snaps to the nearest month across all three panels */}
@@ -281,7 +289,6 @@ function SeasonPanels({ months, monthAvg }: { months: MonthRow[]; monthAvg: Mont
           </g>
         </svg>
         <ChartTooltip
-          width={width}
           tip={
             hover
               ? {
@@ -323,14 +330,16 @@ function pearson(xs: number[], ys: number[]) {
 
 function BusyVsDelayed({ months }: { months: MonthRow[] }) {
   const [ref, width] = useWidth(520);
-  const { tip, bind } = useTooltip();
-  const m = { top: 12, right: 16, bottom: 44, left: 44 };
+  const { tip, bind, svgProps } = useTooltip({ order: "x" });
+  const m = { top: 22, right: 16, bottom: 52, left: 60 };
   const innerW = Math.max(200, width - m.left - m.right);
   const innerH = 300;
   const [x0, x1] = extent(months, (d) => d.volumeVsYearAvg) as [number, number];
   const [y0, y1] = extent(months, (d) => d.delayRate) as [number, number];
-  const x = scaleLinear().domain([x0 - 1, x1 + 1]).nice().range([0, innerW]);
-  const y = scaleLinear().domain([Math.floor(y0 - 1), y1 + 1]).nice().range([innerH, 0]);
+  // nice() and ticks() use the same count, so the plot edges land exactly on gridlines
+  const TICKS = 5;
+  const x = scaleLinear().domain([x0, x1]).nice(TICKS).range([0, innerW]);
+  const y = scaleLinear().domain([y0, y1]).nice(TICKS).range([innerH, 0]);
   const r = pearson(months.map((d) => d.volumeVsYearAvg), months.map((d) => d.delayRate));
 
   const group = (d: MonthRow) => (d.month === 10 ? "oct" : d.month === 6 || d.month === 7 ? "summer" : "other");
@@ -362,19 +371,30 @@ function BusyVsDelayed({ months }: { months: MonthRow[] }) {
         />
       }
     >
-      <div ref={ref} className="relative">
-        <svg width={width} height={innerH + m.top + m.bottom} role="img" aria-label="Volume versus delay rate by month">
+      <div ref={ref} data-chart="" className="relative">
+        <svg {...svgProps} width={width} height={innerH + m.top + m.bottom} role="img" aria-label="Volume versus delay rate by month">
           <g transform={`translate(${m.left},${m.top})`}>
-            <GridY ticks={y.ticks(5)} y={y} width={innerW} format={pct0} />
-            <GridX
-              ticks={x.ticks(5)}
-              x={x}
-              height={innerH}
-              format={(v) => `${v > 0 ? "+" : ""}${v}%`}
-              label="Flights/day vs. that year’s average →"
-              width={innerW}
-            />
-            <line x1={x(0)} x2={x(0)} y2={innerH} stroke={UI.baseline} />
+            <GridY ticks={y.ticks(TICKS)} y={y} width={innerW} format={pct0} />
+            <GridX ticks={x.ticks(TICKS)} x={x} height={innerH} format={(v) => `${v > 0 ? "+" : ""}${v}%`} />
+            {/* axis lines on the plot edges */}
+            <line x1={0} x2={0} y1={0} y2={innerH} stroke={UI.baseline} />
+            <line x1={0} x2={innerW} y1={innerH} y2={innerH} stroke={UI.baseline} />
+            {/* reference: a month exactly as busy as its year's average */}
+            <line x1={x(0)} x2={x(0)} y1={0} y2={innerH} stroke={UI.ink} strokeOpacity={0.4} />
+            <text x={x(0)} y={-8} textAnchor="middle" style={{ fill: UI.ink2, fontSize: 11 }}>
+              Year average
+            </text>
+            {/* axis titles */}
+            <text x={innerW / 2} y={innerH + 38} textAnchor="middle" style={{ fill: UI.ink2, fontSize: 11.5 }}>
+              Flights per day vs. that year&rsquo;s average
+            </text>
+            <text
+              transform={`translate(${-46},${innerH / 2}) rotate(-90)`}
+              textAnchor="middle"
+              style={{ fill: UI.ink2, fontSize: 11.5 }}
+            >
+              % of arrivals delayed ≥15 min
+            </text>
             {ordered.map((d) => {
               const g = group(d);
               return (
@@ -405,7 +425,7 @@ function BusyVsDelayed({ months }: { months: MonthRow[] }) {
             </text>
           </g>
         </svg>
-        <ChartTooltip tip={tip} width={width} />
+        <ChartTooltip tip={tip} />
       </div>
     </ChartCard>
   );
@@ -432,7 +452,7 @@ function CauseByMonth({ monthAvg }: { monthAvg: MonthAvg[] }) {
       title={`Every cause rises in June–July; ${CAUSE_LABEL[most].toLowerCase()} swings the most (×${ratio(most).toFixed(1)})`}
       subtitle="Delay minutes per scheduled flight, average of each calendar month. Each panel has its own scale."
     >
-      <div ref={ref} className="grid gap-x-5 gap-y-4" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
+      <div ref={ref} data-chart="" className="grid gap-x-5 gap-y-4" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}>
         {SEASON_CAUSES.map((c) => (
           <CausePanel key={c} cause={c} monthAvg={monthAvg} width={Math.floor(panelW)} ratio={ratio(c)} />
         ))}
@@ -442,8 +462,8 @@ function CauseByMonth({ monthAvg }: { monthAvg: MonthAvg[] }) {
 }
 
 function CausePanel({ cause, monthAvg, width, ratio }: { cause: Cause; monthAvg: MonthAvg[]; width: number; ratio: number }) {
-  const { tip, bind } = useTooltip();
-  const m = { top: 34, right: 4, bottom: 20, left: 26 };
+  const { tip, bind, svgProps } = useTooltip();
+  const m = { top: 34, right: 4, bottom: 36, left: 44 };
   const innerW = Math.max(100, width - m.left - m.right);
   const innerH = 92;
   const y: ScaleLinear<number, number> = scaleLinear()
@@ -456,7 +476,7 @@ function CausePanel({ cause, monthAvg, width, ratio }: { cause: Cause; monthAvg:
 
   return (
     <div className="relative">
-      <svg width={width} height={innerH + m.top + m.bottom} role="img" aria-label={`${CAUSE_LABEL[cause]} by month`}>
+      <svg {...svgProps} width={width} height={innerH + m.top + m.bottom} role="img" aria-label={`${CAUSE_LABEL[cause]} by month`}>
         <text x={0} y={12} style={{ fill: UI.ink, fontSize: 12, fontWeight: 500 }}>
           {CAUSE_LABEL[cause]}
         </text>
@@ -496,9 +516,20 @@ function CausePanel({ cause, monthAvg, width, ratio }: { cause: Cause; monthAvg:
               {MONTHS[mo - 1]}
             </text>
           ))}
+          {/* axis titles */}
+          <text x={innerW / 2} y={innerH + 30} textAnchor="middle" style={{ fill: UI.ink2, fontSize: 11 }}>
+            Month
+          </text>
+          <text
+            transform={`translate(${-30},${innerH / 2}) rotate(-90)`}
+            textAnchor="middle"
+            style={{ fill: UI.ink2, fontSize: 11 }}
+          >
+            Min per flight
+          </text>
         </g>
       </svg>
-      <ChartTooltip tip={tip} width={width} />
+      <ChartTooltip tip={tip} />
     </div>
   );
 }

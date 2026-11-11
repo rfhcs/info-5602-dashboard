@@ -25,6 +25,7 @@ import {
   useTooltip,
   useWidth,
 } from "@/components/charts/primitives";
+import { usePeriod } from "@/lib/period";
 
 const pct1 = (v: number) => `${v.toFixed(1)}%`;
 const pct0 = (v: number) => `${Math.round(v)}%`;
@@ -100,6 +101,7 @@ export default function RQ1Causes({ causes, carriers }: { causes: CauseTotal[]; 
 const MARKS: Partial<Record<Cause, string>> = { late_aircraft: "1", weather: "2,3", nas: "3" };
 
 function CauseShares({ causes, footnotes }: { causes: CauseTotal[]; footnotes: Footnote[] }) {
+  const period = usePeriod();
   const [ref, width] = useWidth();
   const rows = [...causes].sort((a, b) => b.shareMinutes - a.shareMinutes);
   const stacked = width < 620; // phone: panels stack, each keeps its labels
@@ -109,10 +111,10 @@ function CauseShares({ causes, footnotes }: { causes: CauseTotal[]; footnotes: F
   return (
     <ChartCard
       title="Two ways to measure “biggest”: both put late aircraft first"
-      subtitle="Each cause’s share of delayed flights and of delay minutes, Jan 2023 – Aug 2026"
+      subtitle={`Each cause’s share of delayed flights and of delay minutes, ${period.range}`}
       footnotes={footnotes}
     >
-      <div ref={ref} className={stacked ? "space-y-6" : "grid grid-cols-[1.18fr_1fr] gap-6"}>
+      <div ref={ref} data-chart="" className={stacked ? "space-y-6" : "grid grid-cols-[1.18fr_1fr] gap-6"}>
         <SharePanel
           rows={rows}
           value={(r) => r.shareFlights}
@@ -153,7 +155,7 @@ function SharePanel({
   showLabels: boolean;
   width: number;
 }) {
-  const { tip, bind } = useTooltip();
+  const { tip, bind, svgProps } = useTooltip();
   const compactLabels = width < 480; // phone: short cause names, fewer ticks
   const m = { top: 28, right: 48, bottom: 26, left: showLabels ? (compactLabels ? 104 : 168) : 14 };
   const innerW = Math.max(60, width - m.left - m.right);
@@ -168,7 +170,7 @@ function SharePanel({
 
   return (
     <div className="relative">
-      <svg width={width} height={innerH + m.top + m.bottom} role="img" aria-label={title}>
+      <svg {...svgProps} width={width} height={innerH + m.top + m.bottom} role="img" aria-label={title}>
         <text x={m.left} y={14} style={{ fill: UI.ink, fontSize: 13, fontWeight: 500 }}>
           {title}
         </text>
@@ -208,7 +210,7 @@ function SharePanel({
           <line y2={innerH} stroke={UI.baseline} />
         </g>
       </svg>
-      <ChartTooltip tip={tip} width={width} />
+      <ChartTooltip tip={tip} />
     </div>
   );
 }
@@ -232,8 +234,9 @@ const listNames = (xs: string[]) =>
 const NUMBER_WORDS = ["no", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"];
 
 function CarrierMix({ carriers }: { carriers: Carrier[] }) {
+  const period = usePeriod();
   const [ref, width] = useWidth();
-  const { tip, bind } = useTooltip();
+  const { tip, bind, svgProps } = useTooltip();
   const rows = [...carriers].sort((a, b) => b.share.late_aircraft - a.share.late_aircraft);
   const narrow = width < 560;
 
@@ -259,7 +262,7 @@ function CarrierMix({ carriers }: { carriers: Carrier[] }) {
           main cause.
         </>
       }
-      subtitle="Share of each airline’s delay minutes caused by late aircraft vs by the airline itself, Jan 2023 – Aug 2026"
+      subtitle={`Share of each airline’s delay minutes caused by late aircraft vs by the airline itself, ${period.range}`}
       legend={
         <Legend
           items={[
@@ -280,8 +283,8 @@ function CarrierMix({ carriers }: { carriers: Carrier[] }) {
         },
       ]}
     >
-      <div ref={ref} className="relative">
-        <svg width={width} height={innerH + m.top + m.bottom} role="img" aria-label="Late aircraft versus carrier share of delay minutes by airline">
+      <div ref={ref} data-chart="" className="relative">
+        <svg {...svgProps} width={width} height={innerH + m.top + m.bottom} role="img" aria-label="Late aircraft versus carrier share of delay minutes by airline">
           <g transform={`translate(${m.left},${m.top})`}>
             <GridX ticks={x.ticks(narrow ? 3 : 6)} x={x} height={innerH} format={pct0} />
             {/* 50% reference: "over half" */}
@@ -356,7 +359,7 @@ function CarrierMix({ carriers }: { carriers: Carrier[] }) {
             <line y2={innerH} stroke={UI.baseline} />
           </g>
         </svg>
-        <ChartTooltip tip={tip} width={width} />
+        <ChartTooltip tip={tip} />
       </div>
     </ChartCard>
   );

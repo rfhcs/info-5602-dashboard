@@ -32,6 +32,7 @@ import {
   useTooltip,
   useWidth,
 } from "@/components/charts/primitives";
+import { usePeriod } from "@/lib/period";
 
 const FLOOR = 100_000;
 const pct1 = (v: number) => `${v.toFixed(1)}%`;
@@ -39,6 +40,18 @@ const pct0 = (v: number) => `${Math.round(v)}%`;
 const signed = (v: number) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v).toFixed(1)}`;
 const commas = format(",.0f");
 const shortCity = (c: string) => c.replace("West Palm Beach/Palm Beach", "West Palm Beach").replace("Dallas/Fort Worth", "Dallas–Fort Worth");
+
+/** "San Francisco, CA" → "San Francisco". */
+const cityOf = (d: Airport) => shortCity(d.city).split(",")[0];
+
+/** The first n distinct city names, in order ("New York" counts once for LGA + JFK). */
+const topCities = (rows: Airport[], n: number) => [...new Set(rows.map(cityOf))].slice(0, n);
+
+const listNames = (xs: string[]) =>
+  xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
+
+/** True when most of a ranking's top rows are below the volume floor, i.e. the list is small-airport noise. */
+const smallLed = (rows: Airport[]) => rows.slice(0, 5).filter((d) => d.flights < FLOOR).length >= 3;
 
 /** An airport as shown under the current filter settings. */
 type View = Airport & { rate: number; excess: number };
@@ -56,27 +69,37 @@ export default function RQ3Airports({
   const [shrink, setShrink] = useState(false);
   const p = nationalDelayRate / 100;
 
-  const view: View[] = useMemo(
-    () =>
-      airports
-        .filter((a) => !floor || a.flights >= FLOOR)
-        .map((a) => ({
-          ...a,
-          rate: shrink ? ((a.delayed + shrinkK * p) / (a.flights + shrinkK)) * 100 : a.delayRate,
-          excess: shrink ? ((a.delayed - a.expDelayed) / (a.flights + shrinkK)) * 100 : a.excessPp,
-        })),
-    [airports, floor, shrink, shrinkK, p],
-  );
+  const sum = (xs: Airport[], f: (a: Airport) => number) => xs.reduce((s, a) => s + f(a), 0);
+  const totalFlights = sum(airports, (a) => a.flights);
+  const nationalMpf = {
+    nas: sum(airports, (a) => a.mpf.nas * a.flights) / totalFlights,
+    weather: sum(airports, (a) => a.mpf.weather * a.flights) / totalFlights,
+  };
+
+  // Shrinking blends each airport with the national value, weighted by how few
+  // arrivals it has: rates (charts 1–2), excess delay (chart 3) and minutes per
+  // arrival (chart 4) all use the same k.
+  const view: View[] = useMemo(() => {
+    const blend = (v: number, n: number, national: number) => (v * n + shrinkK * national) / (n + shrinkK);
+    return airports
+      .filter((a) => !floor || a.flights >= FLOOR)
+      .map((a) => ({
+        ...a,
+        rate: shrink ? ((a.delayed + shrinkK * p) / (a.flights + shrinkK)) * 100 : a.delayRate,
+        excess: shrink ? ((a.delayed - a.expDelayed) / (a.flights + shrinkK)) * 100 : a.excessPp,
+        mpf: shrink
+          ? {
+              ...a.mpf,
+              nas: blend(a.mpf.nas, a.flights, nationalMpf.nas),
+              weather: blend(a.mpf.weather, a.flights, nationalMpf.weather),
+            }
+          : a.mpf,
+      }));
+  }, [airports, floor, shrink, shrinkK, p, nationalMpf.nas, nationalMpf.weather]);
 
   const top30 = [...airports].sort((a, b) => b.flights - a.flights).slice(0, 30);
-  const sum = (xs: Airport[], f: (a: Airport) => number) => xs.reduce((s, a) => s + f(a), 0);
-  const top30Flights = (sum(top30, (a) => a.flights) / sum(airports, (a) => a.flights)) * 100;
+  const top30Flights = (sum(top30, (a) => a.flights) / totalFlights) * 100;
   const top30Delays = (sum(top30, (a) => a.delayed) / sum(airports, (a) => a.delayed)) * 100;
-  const atl = airports.find((a) => a.code === "ATL");
-  const nationalMpf = {
-    nas: sum(airports, (a) => a.mpf.nas * a.flights) / sum(airports, (a) => a.flights),
-    weather: sum(airports, (a) => a.mpf.weather * a.flights) / sum(airports, (a) => a.flights),
-  };
 
   return (
     <Section
@@ -116,7 +139,7 @@ export default function RQ3Airports({
 
       {/* ---- filter row: one row, above everything it scopes ---- */}
       <>
-        <div className="sticky top-16 z-10 flex flex-wrap items-center gap-x-6 gap-y-3 rounded-lg bg-card/95 px-4 py-3 shadow-sm ring-1 ring-foreground/10 backdrop-blur">
+        <div className="z-10 flex md:sticky md:top-16 flex-wrap items-center gap-x-6 gap-y-3 rounded-lg bg-card/95 px-4 py-3 shadow-sm ring-1 ring-foreground/10 backdrop-blur">
           <div className="flex items-center gap-2.5">
             <Switch id="floor" checked={floor} onCheckedChange={setFloor} />
             <Label htmlFor="floor" className="text-sm font-normal">
@@ -138,13 +161,12 @@ export default function RQ3Airports({
           airports with too few arrivals for a stable rate. Shrinking keeps every airport but blends its rate with the
           US average ({pct1(nationalDelayRate)}) in proportion to how little data it has: an airport with{" "}
           {Math.round(shrinkK)} arrivals moves halfway, while ATL barely moves. The strength (k ≈ {Math.round(shrinkK)}{" "}
-          arrivals) is estimated from the data. Shrinking adjusts rates (charts 1–3); the cause rankings (chart 4)
-          are unshrunk. Turn both off to see the noise that both fixes deal with.
+          arrivals) is estimated from the data. Turn both off to see the noise that both fixes deal with.
         </p>
       </>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <RateRanking view={view} national={nationalDelayRate} />
+        <RateRanking view={view} national={nationalDelayRate} floor={floor} shrink={shrink} />
         <SizeVsRate view={view} national={nationalDelayRate} />
       </div>
 
@@ -154,7 +176,7 @@ export default function RQ3Airports({
       </Bridge>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <ExcessDelay view={view} atl={atl} />
+        <ExcessDelay view={view} />
         <Fingerprint view={view} national={nationalMpf} />
       </div>
     </Section>
@@ -167,15 +189,18 @@ export default function RQ3Airports({
 function placeLabels(
   items: { key: string; x: number; y: number; r?: number; text: string }[],
   bounds: { w: number; h: number },
+  obstacles: { x: number; y: number; r: number }[] = [],
   charW = 6.6,
 ) {
   const placed: { key: string; x: number; y: number; anchor: "start" | "end" | "middle"; text: string; box: number[] }[] = [];
   const hit = (a: number[], b: number[]) => a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1];
-  // every dot is an obstacle too, so labels never sit on another mark
-  const dots = items.map((it) => {
-    const r = it.r ?? 4;
-    return [it.x - r, it.y - r, it.x + r, it.y + r];
-  });
+  // every dot on the chart is an obstacle (not just the labelled ones), so labels never sit on a mark
+  const dots = [...items.map((it) => ({ x: it.x, y: it.y, r: it.r ?? 4 })), ...obstacles].map((d) => [
+    d.x - d.r,
+    d.y - d.r,
+    d.x + d.r,
+    d.y + d.r,
+  ]);
   for (const it of items) {
     const w = it.text.length * charW;
     const r = it.r ?? 4;
@@ -203,9 +228,10 @@ function placeLabels(
    Fix 1 (+2): the 15 highest delay rates. Single series → one colour (navy).
    A hairline marks the US average.                                          */
 
-function RateRanking({ view, national }: { view: View[]; national: number }) {
+function RateRanking({ view, national, floor, shrink }: { view: View[]; national: number; floor: boolean; shrink: boolean }) {
+  const period = usePeriod();
   const [ref, width] = useWidth(520);
-  const { tip, bind } = useTooltip();
+  const { tip, bind, svgProps } = useTooltip();
   const rows = [...view].sort((a, b) => b.rate - a.rate).slice(0, 15);
   const m = { top: 22, right: 46, bottom: 26, left: 150 };
   const innerW = Math.max(120, width - m.left - m.right);
@@ -214,15 +240,26 @@ function RateRanking({ view, national }: { view: View[]; national: number }) {
   const y = scaleBand<string>().domain(rows.map((d) => d.code)).range([0, innerH]).paddingInner(0.35).paddingOuter(0.1);
   const bh = Math.min(16, y.bandwidth());
 
+  const tag = floor
+    ? `Fixes 1 + 2 · rate, with a volume floor${shrink ? " and shrinkage" : ""}`
+    : shrink
+      ? "Fixes 1 + 2 · rate, with shrinkage"
+      : "Fix 1 · rate only, no volume floor";
+  const florida = rows.filter((d) => d.city.endsWith(", FL")).length;
+  const title = smallLed(rows)
+    ? `Without a volume floor, small airports like ${listNames(topCities(rows, 2))} top the list`
+    : florida >= 3
+      ? `${listNames(topCities(rows, 2))} have the highest delay rates, and ${florida} of the top ${rows.length} are in Florida`
+      : `${listNames(topCities(rows, 3))} have the highest delay rates`;
 
   return (
     <ChartCard
-      tag="Fixes 1 + 2 · rate, with a volume floor"
-      title="San Juan, San Francisco and Florida have the highest delay rates"
-      subtitle="15 highest % of arrivals delayed ≥15 min, Jan 2023 – Aug 2026"
+      tag={tag}
+      title={title}
+      subtitle={`15 highest % of arrivals delayed ≥15 min, ${period.range}`}
     >
-      <div ref={ref} className="relative">
-        <svg width={width} height={innerH + m.top + m.bottom} role="img" aria-label="Airports with the highest delay rates">
+      <div ref={ref} data-chart="" className="relative">
+        <svg {...svgProps} width={width} height={innerH + m.top + m.bottom} role="img" aria-label="Airports with the highest delay rates">
           <g transform={`translate(${m.left},${m.top})`}>
             <GridX ticks={x.ticks(4)} x={x} height={innerH} format={pct0} />
             {rows.map((d) => {
@@ -262,7 +299,7 @@ function RateRanking({ view, national }: { view: View[]; national: number }) {
             <line y2={innerH} stroke={UI.baseline} />
           </g>
         </svg>
-        <ChartTooltip tip={tip} width={width} />
+        <ChartTooltip tip={tip} />
       </div>
     </ChartCard>
   );
@@ -272,16 +309,38 @@ function RateRanking({ view, national }: { view: View[]; national: number }) {
    Fix 2 evidence: if delays tracked size, dots would climb to the right.
    Emphasis: ≥3 pts above the US average in red, ≥3 below in navy.         */
 
+/** 1, 10, 100k… → "1", "10", "100k", "1M". */
+const fmtCount = (v: number) => (v >= 1e6 ? `${v / 1e6}M` : v >= 1e3 ? `${v / 1e3}k` : String(v));
+
+/**
+ * Log-axis domain and ticks whose ends sit on gridlines. Up to 2.5 decades:
+ * ticks on 1-2-5 steps (100k, 200k, 500k, 1M, 2M). Wider: powers of ten.
+ */
+function logTicks(lo: number, hi: number) {
+  const span = Math.log10(hi) - Math.log10(lo);
+  const steps = span <= 2.5 ? [1, 2, 5] : [1];
+  const cands: number[] = [];
+  for (let e = Math.floor(Math.log10(lo)) - 1; e <= Math.ceil(Math.log10(hi)) + 1; e++)
+    for (const s of steps) cands.push(s * 10 ** e);
+  const d0 = Math.max(...cands.filter((c) => c <= lo));
+  const d1 = Math.min(...cands.filter((c) => c >= hi));
+  return { domain: [d0, d1] as [number, number], ticks: cands.filter((c) => c >= d0 && c <= d1) };
+}
+
 function SizeVsRate({ view, national }: { view: View[]; national: number }) {
+  const period = usePeriod();
   const [ref, width] = useWidth(520);
-  const { tip, bind } = useTooltip();
-  const m = { top: 12, right: 18, bottom: 44, left: 40 };
+  const { tip, bind, svgProps } = useTooltip({ order: "x" });
+  const m = { top: 12, right: 18, bottom: 52, left: 60 };
   const innerW = Math.max(200, width - m.left - m.right);
   const innerH = 330;
   const [f0, f1] = extent(view, (d) => d.flights) as [number, number];
   const [r0, r1] = extent(view, (d) => d.rate) as [number, number];
-  const x = scaleLog().domain([f0 * 0.85, f1 * 1.15]).range([0, innerW]);
-  const y = scaleLinear().domain([Math.min(r0, national) - 1, Math.max(r1, national) + 1]).nice().range([innerH, 0]);
+  // Both axes are snapped so the plot edges land exactly on gridlines.
+  const { domain: xDomain, ticks: xTicks } = logTicks(f0, f1);
+  const x = scaleLog().domain(xDomain).range([0, innerW]);
+  const Y_TICKS = 5;
+  const y = scaleLinear().domain([Math.min(r0, national), Math.max(r1, national)]).nice(Y_TICKS).range([innerH, 0]);
 
   const lx = view.map((d) => Math.log(d.flights));
   const ly = view.map((d) => d.rate);
@@ -290,14 +349,15 @@ function SizeVsRate({ view, national }: { view: View[]; national: number }) {
   const tone = (d: View) => (d.rate >= national + 3 ? "hi" : d.rate <= national - 3 ? "lo" : "mid");
   const color = { hi: UI.tertiary, lo: UI.primary, mid: UI.stone };
   const ordered = [...view].sort((a, b) => (tone(a) === "mid" ? -1 : 1) - (tone(b) === "mid" ? -1 : 1));
+  const dotR = view.length > 100 ? 3.5 : 4.5;
   const labels = placeLabels(
     [...view]
       .filter((d) => d.flights >= FLOOR && (tone(d) !== "mid" || d.sizeRank <= 4))
       .sort((a, b) => Math.abs(b.rate - national) - Math.abs(a.rate - national))
-      .map((d) => ({ key: d.code, x: x(d.flights), y: y(d.rate), r: 4.5, text: d.code })),
+      .map((d) => ({ key: d.code, x: x(d.flights), y: y(d.rate), r: dotR, text: d.code })),
     { w: innerW, h: innerH },
+    view.map((d) => ({ x: x(d.flights), y: y(d.rate), r: dotR })),
   );
-  const xTicks = [1e3, 1e4, 1e5, 1e6].filter((t) => t >= x.domain()[0] && t <= x.domain()[1]);
 
 
   return (
@@ -320,18 +380,25 @@ function SizeVsRate({ view, national }: { view: View[]; national: number }) {
         />
       }
     >
-      <div ref={ref} className="relative">
-        <svg width={width} height={innerH + m.top + m.bottom} role="img" aria-label="Airport size versus delay rate">
+      <div ref={ref} data-chart="" className="relative">
+        <svg {...svgProps} width={width} height={innerH + m.top + m.bottom} role="img" aria-label="Airport size versus delay rate">
           <g transform={`translate(${m.left},${m.top})`}>
-            <GridY ticks={y.ticks(5)} y={y} width={innerW} format={pct0} />
-            <GridX
-              ticks={xTicks}
-              x={x}
-              height={innerH}
-              format={(v) => (v >= 1e6 ? "1M" : `${v / 1e3}k`)}
-              label="Arrivals, Jan 2023 – Aug 2026 →"
-              width={innerW}
-            />
+            <GridY ticks={y.ticks(Y_TICKS)} y={y} width={innerW} format={pct0} />
+            <GridX ticks={xTicks} x={x} height={innerH} format={fmtCount} />
+            {/* axis lines on the plot edges */}
+            <line x1={0} x2={0} y1={0} y2={innerH} stroke={UI.baseline} />
+            <line x1={0} x2={innerW} y1={innerH} y2={innerH} stroke={UI.baseline} />
+            {/* axis titles */}
+            <text x={innerW / 2} y={innerH + 38} textAnchor="middle" style={{ fill: UI.ink2, fontSize: 11.5 }}>
+              Arrivals, {period.range} (log scale)
+            </text>
+            <text
+              transform={`translate(${-46},${innerH / 2}) rotate(-90)`}
+              textAnchor="middle"
+              style={{ fill: UI.ink2, fontSize: 11.5 }}
+            >
+              % of arrivals delayed ≥15 min
+            </text>
             <line x2={innerW} y1={y(national)} y2={y(national)} stroke={UI.ink} strokeOpacity={0.5} />
             <text x={4} y={y(national) - 5} style={{ fill: UI.ink2, fontSize: 11 }}>
               US avg
@@ -354,7 +421,7 @@ function SizeVsRate({ view, national }: { view: View[]; national: number }) {
                   )}
                 >
                   <circle cx={x(d.flights)} cy={y(d.rate)} r={10} fill="transparent" />
-                  <circle cx={x(d.flights)} cy={y(d.rate)} r={view.length > 100 ? 3.5 : 4.5} fill={color[t]} stroke={UI.surface} strokeWidth={view.length > 100 ? 1 : 2} />
+                  <circle cx={x(d.flights)} cy={y(d.rate)} r={dotR} fill={color[t]} stroke={UI.surface} strokeWidth={view.length > 100 ? 1 : 2} />
                 </g>
               );
             })}
@@ -365,7 +432,7 @@ function SizeVsRate({ view, national }: { view: View[]; national: number }) {
             ))}
           </g>
         </svg>
-        <ChartTooltip tip={tip} width={width} />
+        <ChartTooltip tip={tip} />
       </div>
     </ChartCard>
   );
@@ -388,9 +455,9 @@ function corr(xs: number[], ys: number[]) {
    Fix 3: excess delay vs the airline-mix expectation. Diverging bars from a
    zero baseline: red = worse than its airlines, navy = better. Top & bottom 12. */
 
-function ExcessDelay({ view, atl }: { view: View[]; atl?: Airport }) {
+function ExcessDelay({ view }: { view: View[] }) {
   const [ref, width] = useWidth(520);
-  const { tip, bind } = useTooltip();
+  const { tip, bind, svgProps } = useTooltip();
   const sorted = [...view].sort((a, b) => b.excess - a.excess);
   const n = Math.min(12, Math.floor(sorted.length / 2));
   const rows = [...sorted.slice(0, n), ...sorted.slice(-n)];
@@ -403,11 +470,18 @@ function ExcessDelay({ view, atl }: { view: View[]; atl?: Airport }) {
   const y = (i: number) => i * 21 + (i >= n ? 10 : 0);
   const bh = 13;
 
+  const atl = view.find((d) => d.code === "ATL");
+  const [first, second] = sorted;
+  const title = smallLed(sorted)
+    ? `Without a volume floor, small airports like ${listNames(topCities(sorted, 2))} swing furthest from their airlines’ average`
+    : second && first.excess - second.excess >= 2
+      ? `${cityOf(first)} stands out: about ${Math.round(first.excess)} points worse than its airlines manage elsewhere`
+      : `${listNames([cityOf(first), cityOf(second ?? first)].filter((v, i, a) => a.indexOf(v) === i))} run furthest above what their airlines manage elsewhere`;
 
   return (
     <ChartCard
       tag="Fix 3 · airline-mix adjustment"
-      title="SFO stands out: about 7 points worse than its airlines manage elsewhere"
+      title={title}
       subtitle="Percentage points above or below what each airport’s airlines achieve nationally in the same month"
       legend={
         <Legend
@@ -426,17 +500,17 @@ function ExcessDelay({ view, atl }: { view: View[]; atl?: Airport }) {
               {atl && (
                 <>
                   {" "}
-                  ATL has the most arrivals in the data and sits at {signed(atl.excessPp)} pts.
+                  ATL has the most arrivals in the data and sits at {signed(atl.excess)} pts.
                 </>
               )}{" "}
-              Rankings are fairly stable from year to year (rank correlation 0.55–0.76), so this isn&rsquo;t noise.
+              Rankings are fairly stable from year to year (rank correlation 0.66–0.82 between any two years), so this isn&rsquo;t noise.
             </>
           ),
         },
       ]}
     >
-      <div ref={ref} className="relative">
-        <svg width={width} height={innerH + m.top + m.bottom} role="img" aria-label="Excess delay by airport">
+      <div ref={ref} data-chart="" className="relative">
+        <svg {...svgProps} width={width} height={innerH + m.top + m.bottom} role="img" aria-label="Excess delay by airport">
           <g transform={`translate(${m.left},${m.top})`}>
             <GridX ticks={x.ticks(5)} x={x} height={innerH} format={(v) => (v === 0 ? "0" : signed(v).replace(".0", ""))} />
             {rows.map((d, i) => {
@@ -480,7 +554,7 @@ function ExcessDelay({ view, atl }: { view: View[]; atl?: Airport }) {
             <line x1={x(0)} x2={x(0)} y2={innerH} stroke={UI.ink2} />
           </g>
         </svg>
-        <ChartTooltip tip={tip} width={width} />
+        <ChartTooltip tip={tip} />
       </div>
     </ChartCard>
   );
@@ -496,10 +570,23 @@ const TOP_N = 10;
 
 function Fingerprint({ view, national }: { view: View[]; national: { nas: number; weather: number } }) {
   const sfo = view.find((d) => d.code === "SFO");
+  const byNas = [...view].sort((a, b) => b.mpf.nas - a.mpf.nas);
+  const byWx = [...view].sort((a, b) => b.mpf.weather - a.mpf.weather);
+  // each list is judged on its own: one can be clean while the other is small-airport noise
+  const nasSmall = smallLed(byNas);
+  const wxSmall = smallLed(byWx);
+  const title =
+    nasSmall && wxSmall
+      ? "Without a volume floor, small airports with few flights dominate both lists"
+      : nasSmall
+        ? `Small airports with few flights top the air-traffic list; ${listNames(topCities(byWx, 3))} lose the most time to extreme weather`
+        : wxSmall
+          ? `${listNames(topCities(byNas, 3))} lose the most time to air traffic; small airports with few flights top the extreme-weather list`
+          : `${listNames(topCities(byNas, 3))} lose the most time to air traffic; ${listNames(topCities(byWx, 3))} to extreme weather`;
   return (
     <ChartCard
       tag="Fix 4 · cause fingerprint"
-      title="Newark, SFO and New York lose the most time to air traffic; Dallas, Chicago and the upper Midwest to extreme weather"
+      title={title}
       subtitle={`Delay minutes per arrival from each cause: the ${TOP_N} highest airports for each. Each panel has its own scale.`}
       footnotes={[
         {
@@ -508,7 +595,7 @@ function Fingerprint({ view, national }: { view: View[]; national: { nas: number
             <>
               NAS = air traffic control, runway capacity and congestion: the delay cause an airport has the most control
               over.{sfo && <> {pct0(sfo.share.nas)} of SFO&rsquo;s delay minutes are NAS: fog and closely spaced parallel runways cut its arrival rate.</>}{" "}
-              EWR and LGA also have the highest cancellation rates (about 3%).
+              EWR and LGA also have some of the highest cancellation rates among large airports (about 3%).
             </>
           ),
         },
@@ -534,9 +621,10 @@ function CauseRanking({
   national: number;
 }) {
   const [ref, width] = useWidth(520);
-  const { tip, bind } = useTooltip();
+  const { tip, bind, svgProps } = useTooltip();
   const rows = [...view].sort((a, b) => b.mpf[cause] - a.mpf[cause]).slice(0, TOP_N);
-  const m = { top: 34, right: 52, bottom: 24, left: 150 };
+  // header (y≈13) and the "US avg" label (y≈40) each get their own row
+  const m = { top: 50, right: 52, bottom: 24, left: 150 };
   const innerW = Math.max(120, width - m.left - m.right);
   const innerH = rows.length * 22;
   const x = scaleLinear().domain([0, max(rows, (d) => d.mpf[cause]) ?? 1]).nice().range([0, innerW]);
@@ -545,8 +633,8 @@ function CauseRanking({
   const color = CAUSE_COLOR[cause];
 
   return (
-    <div ref={ref} className="relative">
-      <svg width={width} height={innerH + m.top + m.bottom} role="img" aria-label={`${title}: delay minutes per arrival`}>
+    <div ref={ref} data-chart="" className="relative">
+      <svg {...svgProps} width={width} height={innerH + m.top + m.bottom} role="img" aria-label={`${title}: delay minutes per arrival`}>
         <text x={0} y={13} style={{ fill: UI.ink, fontSize: 12.5, fontWeight: 500 }}>
           {title}
           <tspan style={{ fill: UI.ink3, fontWeight: 400 }}> · min per arrival</tspan>
@@ -590,7 +678,7 @@ function CauseRanking({
           <line y2={innerH} stroke={UI.baseline} />
         </g>
       </svg>
-      <ChartTooltip tip={tip} width={width} />
+      <ChartTooltip tip={tip} />
     </div>
   );
 }

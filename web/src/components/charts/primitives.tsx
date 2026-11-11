@@ -5,15 +5,20 @@
  * ticks); React renders the SVG so each chart reads top-to-bottom as markup.
  */
 
-import { useCallback, useRef, useState, type ReactNode } from "react";
+import { useCallback, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { UI } from "@/lib/theme";
 
 /* ------------------------------------------------------------ sizing --- */
 
 /**
  * Tracks the rendered width of a container so charts can be responsive.
- * Uses a callback ref so it re-attaches if the container is unmounted and
- * mounted again, and ignores 0-width readings from hidden containers.
+ *
+ * Put `data-chart=""` on the container: globals.css hides it until it has been
+ * measured, so the server-rendered guess (`initial`) never flashes on screen.
+ * The callback ref measures synchronously on mount (React flushes that update
+ * before paint), re-attaches if the container remounts, and ignores 0-width
+ * readings from hidden containers.
  */
 export function useWidth<T extends HTMLElement = HTMLDivElement>(initial = 720) {
   const [width, setWidth] = useState(initial);
@@ -22,6 +27,9 @@ export function useWidth<T extends HTMLElement = HTMLDivElement>(initial = 720) 
     observer.current?.disconnect();
     observer.current = null;
     if (!el) return;
+    const w0 = Math.floor(el.getBoundingClientRect().width);
+    if (w0 > 0) setWidth(w0);
+    el.setAttribute("data-measured", "");
     const ro = new ResizeObserver(([entry]) => {
       const w = Math.floor(entry.contentRect.width);
       if (w > 0) setWidth(w);
@@ -36,40 +44,121 @@ export function useWidth<T extends HTMLElement = HTMLDivElement>(initial = 720) 
 
 type Tip = { x: number; y: number; content: ReactNode } | null;
 
+type Point = { x: number; y: number; content: ReactNode };
+
 /**
- * Tooltip state. Tooltips anchor to the mark (not the cursor) so the same
- * readout appears on keyboard focus as on hover.
+ * Tooltip state for one chart.
+ *
+ * - `bind(x, y, content)` goes on each mark: hovering it shows the tooltip.
+ * - `svgProps` goes on the chart's <svg>: the whole chart is ONE tab stop, and
+ *   the arrow keys step through its marks (Home/End jump, Esc hides). Marks are
+ *   visited in render order, or left-to-right with `{ order: "x" }` (scatters).
  */
-export function useTooltip() {
+export function useTooltip({ order = "render" }: { order?: "render" | "x" } = {}) {
   const [tip, setTip] = useState<Tip>(null);
-  /** Spread onto any SVG mark: hover + keyboard focus both show the tooltip. */
-  const bind = (x: number, y: number, content: ReactNode) => ({
+  const [active, setActive] = useState(-1);
+  // Collected fresh on every render as marks call bind(); handlers read this render's list.
+  const points: Point[] = [];
+
+  const bind = (x: number, y: number, content: ReactNode) => {
+    points.push({ x, y, content });
+    return {
+      onPointerEnter: () => setTip({ x, y, content }),
+      onPointerLeave: () => setTip(null),
+      style: { cursor: "default" } as const,
+    };
+  };
+
+  const ordered = () => (order === "x" ? [...points].sort((a, b) => a.x - b.x || a.y - b.y) : points);
+  const show = (i: number) => {
+    const list = ordered();
+    if (!list.length) return;
+    const k = Math.max(0, Math.min(list.length - 1, i));
+    setActive(k);
+    setTip(list[k]);
+  };
+
+  const svgProps = {
     tabIndex: 0,
-    onPointerEnter: () => setTip({ x, y, content }),
-    onPointerLeave: () => setTip(null),
-    onFocus: () => setTip({ x, y, content }),
+    className: "rounded-sm outline-none focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring",
+    onFocus: () => show(active < 0 ? 0 : active),
     onBlur: () => setTip(null),
-    style: { outline: "none", cursor: "default" } as const,
-  });
-  return { tip, setTip, bind };
+    onKeyDown: (e: KeyboardEvent<SVGSVGElement>) => {
+      const n = ordered().length;
+      const keys: Record<string, number> = {
+        ArrowRight: active + 1,
+        ArrowDown: active + 1,
+        ArrowLeft: active - 1,
+        ArrowUp: active - 1,
+        Home: 0,
+        End: n - 1,
+      };
+      if (e.key in keys) {
+        e.preventDefault();
+        show(keys[e.key]);
+      } else if (e.key === "Escape") {
+        setTip(null);
+      }
+    },
+  };
+
+  return { tip, setTip, bind, svgProps };
 }
 
-export function ChartTooltip({ tip, width }: { tip: Tip; width: number }) {
-  if (!tip) return null;
-  const flip = tip.x > width - 220;
+/**
+ * Renders the tooltip into document.body so no card or panel edge can clip it.
+ * `tip.x / tip.y` are relative to the nearest `relative` container; the anchor
+ * div finds that container's position on the page. The tooltip sits right of
+ * the point, flips left if it would leave the viewport, and is clamped so it
+ * never runs off either side or under the sticky nav.
+ */
+const NAV_HEIGHT = 56;
+
+export function ChartTooltip({ tip }: { tip: Tip; width?: number }) {
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const tipRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const anchor = anchorRef.current;
+    const el = tipRef.current;
+    if (!tip || !anchor || !el) return;
+    const a = anchor.getBoundingClientRect();
+    const t = el.getBoundingClientRect();
+    // prefer staying inside the card the chart lives in; fall back to the viewport
+    const card = anchor.closest("[data-slot=card]")?.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth;
+    const vh = document.documentElement.clientHeight;
+    const gap = 14;
+    const pad = 8;
+    const px = a.left + tip.x;
+    const py = a.top + tip.y;
+    const rightEdge = Math.min(vw - pad, card ? card.right - pad : vw - pad);
+    let left = px + gap;
+    if (left + t.width > rightEdge && px - gap - t.width >= pad) left = px - gap - t.width;
+    left = Math.max(pad, Math.min(left, vw - pad - t.width));
+    let top = py - t.height / 2;
+    top = Math.max(NAV_HEIGHT + pad, Math.min(top, vh - pad - t.height));
+    el.style.left = `${left + window.scrollX}px`;
+    el.style.top = `${top + window.scrollY}px`;
+    el.style.visibility = "visible";
+  }, [tip]);
+
   return (
-    <div
-      role="status"
-      className="pointer-events-none absolute z-20 min-w-36 max-w-64 rounded-md bg-popover px-3 py-2 text-xs shadow-md ring-1 ring-foreground/10"
-      style={{
-        left: flip ? undefined : tip.x + 14,
-        right: flip ? width - tip.x + 14 : undefined,
-        top: tip.y,
-        transform: "translateY(-50%)",
-      }}
-    >
-      {tip.content}
-    </div>
+    <>
+      <div ref={anchorRef} aria-hidden className="pointer-events-none absolute top-0 left-0 size-0" />
+      {tip &&
+        createPortal(
+          <div
+            ref={tipRef}
+            role="status"
+            className="pointer-events-none absolute z-50 min-w-36 max-w-64 rounded-md bg-popover px-3 py-2 text-xs shadow-md ring-1 ring-foreground/10"
+            style={{ left: 0, top: 0, visibility: "hidden" }}
+          >
+            {tip.content}
+          </div>,
+          document.body,
+        )}
+    </>
   );
 }
 
