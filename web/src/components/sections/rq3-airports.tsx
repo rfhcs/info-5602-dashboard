@@ -462,7 +462,7 @@ function ExcessDelay({ view }: { view: View[] }) {
   const title = smallLed(sorted)
     ? `Without a volume floor, small airports like ${listNames(topCities(sorted, 2))} swing furthest from their airlines’ average`
     : second && first.excess - second.excess >= 2
-      ? `${cityOf(first)} stands out: about ${Math.round(first.excess)} points worse than its airlines manage elsewhere`
+      ? `${cityOf(first)} stands out: about ${Math.round(first.excess)}% worse than its airlines managed elsewhere`
       : `${listNames([cityOf(first), cityOf(second ?? first)].filter((v, i, a) => a.indexOf(v) === i))} run furthest above what their airlines manage elsewhere`;
 
   return (
